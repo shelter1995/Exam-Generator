@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能知识库出题系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        .drag-over { border-color: #3b82f6 !important; background: #eff6ff !important; }
+        .fade-in { animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .test-result { transition: all 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-6xl mx-auto p-6">
+        <!-- Header -->
+        <header class="bg-white rounded-xl shadow-sm p-6 mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">智能知识库出题系统</h1>
+            <p class="text-gray-500 mt-1">上传文件 → 构建知识库 → 自定义题型出题</p>
+        </header>
+
+        <!-- Tabs -->
+        <div class="bg-white rounded-xl shadow-sm mb-6">
+            <div class="flex border-b overflow-x-auto">
+                <button onclick="switchTab('db')" id="tab-db" class="tab-btn px-6 py-4 font-medium text-gray-600 hover:text-gray-800 tab-active whitespace-nowrap">🗄️ 数据库管理</button>
+                <button onclick="switchTab('upload')" id="tab-upload" class="tab-btn px-6 py-4 font-medium text-gray-600 hover:text-gray-800 whitespace-nowrap">📤 文件上传</button>
+                <button onclick="switchTab('exam')" id="tab-exam" class="tab-btn px-6 py-4 font-medium text-gray-600 hover:text-gray-800 whitespace-nowrap">📝 生成考题</button>
+                <button onclick="switchTab('history')" id="tab-history" class="tab-btn px-6 py-4 font-medium text-gray-600 hover:text-gray-800 whitespace-nowrap">📋 考卷历史</button>
+                <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn px-6 py-4 font-medium text-gray-600 hover:text-gray-800 whitespace-nowrap">⚙️ 系统设置</button>
+            </div>
+
+            <!-- 数据库管理 -->
+            <div id="panel-db" class="p-6 tab-panel">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- 创建数据库 -->
+                    <div class="lg:col-span-1">
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-700 mb-4">创建新数据库</h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">数据库ID</label>
+                                    <input id="new-db-id" type="text" placeholder="如: business_knowledge" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">显示名称</label>
+                                    <input id="new-db-name" type="text" placeholder="如: 业务知识库" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">描述（可选）</label>
+                                    <input id="new-db-desc" type="text" placeholder="数据库用途说明" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                                <button onclick="createDatabase()" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition">创建数据库</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 数据库列表 -->
+                    <div class="lg:col-span-2">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-semibold text-gray-700">数据库列表</h3>
+                            <button onclick="loadDatabases()" class="text-blue-600 hover:text-blue-800 text-sm">刷新</button>
+                        </div>
+                        <div id="db-list" class="space-y-2">
+                            <div class="text-gray-400 text-center py-8">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文件上传 -->
+            <div id="panel-upload" class="p-6 tab-panel hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-1">
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-700 mb-4">上传设置</h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">目标数据库</label>
+                                    <select id="upload-db-id" onchange="onUploadDbChange()" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                        <option value="default">默认数据库</option>
+                                    </select>
+                                </div>
+                                <div class="text-sm text-gray-500 bg-blue-50 p-3 rounded-lg">
+                                    <p class="font-medium text-blue-700 mb-1">支持格式</p>
+                                    <p>文档: PDF, DOCX, XLSX, PPTX, TXT, MD</p>
+                                    <p>音频: MP3, WAV, M4A, FLAC, AAC</p>
+                                    <p>视频: MP4, AVI, MOV, MKV, WMV</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="lg:col-span-2 space-y-4">
+                        <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-gray-400 transition cursor-pointer"
+                             ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)" onclick="document.getElementById('file-input').click()">
+                            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            <p class="mt-2 text-gray-600">点击或拖拽文件到此处上传</p>
+                            <p class="text-sm text-gray-400 mt-1">支持批量上传多个文件</p>
+                            <input id="file-input" type="file" multiple class="hidden" onchange="handleFiles(this.files)">
+                        </div>
+                        <div id="upload-results" class="space-y-2"></div>
+                        <div id="db-files-section" class="hidden">
+                            <div class="flex items-center justify-between mb-2">
+                                <h4 class="font-medium text-gray-700">已有文件</h4>
+                                <span id="db-files-count" class="text-xs text-gray-400"></span>
+                            </div>
+                            <div id="db-files-list" class="space-y-1 max-h-64 overflow-y-auto">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 生成考题 -->
+            <div id="panel-exam" class="p-6 tab-panel hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- 配置面板 -->
+                    <div class="lg:col-span-1 space-y-4">
+                        <div id="llm-model-status" class="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+                            <span id="llm-status-text" class="text-sm text-gray-500">加载中...</span>
+                            <a onclick="switchTab('settings')" class="text-xs text-blue-600 hover:text-blue-800 cursor-pointer whitespace-nowrap">修改</a>
+                        </div>
+
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-700 mb-4">考题配置</h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">考卷标题</label>
+                                    <input id="exam-title" type="text" value="综合培训考题" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">出题方式</label>
+                                    <div class="flex gap-4">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="radio" name="exam-mode" value="keyword" checked onchange="onExamModeChange()" class="w-4 h-4">
+                                            <span class="text-sm text-gray-700">按关键词出题</span>
+                                        </label>
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="radio" name="exam-mode" value="file" onchange="onExamModeChange()" class="w-4 h-4">
+                                            <span class="text-sm text-gray-700">按文件出题</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div id="exam-keyword-section">
+                                    <label class="block text-sm text-gray-600 mb-1">搜索关键词（每行一个）</label>
+                                    <textarea id="exam-queries" rows="3" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="企业发展战略&#10;风险防范措施&#10;业务拓展路径"></textarea>
+                                </div>
+                                <div id="exam-file-section" class="hidden">
+                                    <div class="mb-2">
+                                        <p class="text-sm text-gray-500">请先选择数据库，再选择该数据库中的文件</p>
+                                    </div>
+                                    <div id="exam-file-selects" class="space-y-2">
+                                    </div>
+                                    <button onclick="addExamFileSelect()" class="mt-2 w-full border-2 border-dashed border-gray-300 text-gray-500 py-1.5 rounded-lg hover:border-blue-500 hover:text-blue-500 transition text-sm">+ 添加文件</button>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">考试时间</label>
+                                    <input id="exam-time" type="text" value="90分钟" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">合格线（分）</label>
+                                    <input id="exam-pass" type="number" value="60" min="0" max="100" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-700 mb-4">题型设置</h3>
+                            <div id="question-types" class="space-y-3">
+                            </div>
+                            <button onclick="addQuestionType()" class="mt-3 w-full border-2 border-dashed border-gray-300 text-gray-500 py-2 rounded-lg hover:border-blue-500 hover:text-blue-500 transition">+ 添加题型</button>
+                        </div>
+
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-700 mb-4">数据库选择</h3>
+                            <div id="exam-db-select" class="space-y-2">
+                                <p class="text-gray-400 text-sm">请先创建数据库</p>
+                            </div>
+                            <div class="mt-3 flex items-center gap-2">
+                                <input id="merge-results" type="checkbox" checked class="w-4 h-4">
+                                <label for="merge-results" class="text-sm text-gray-600">合并多库结果</label>
+                            </div>
+                        </div>
+
+                        <button onclick="generateExam()" id="btn-generate" class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-medium flex items-center justify-center gap-2">
+                            <span>生成考卷</span>
+                        </button>
+                    </div>
+
+                    <!-- 结果预览 -->
+                    <div class="lg:col-span-2">
+                        <div class="bg-white border rounded-lg p-4 min-h-[600px]">
+                            <div class="flex items-center justify-between mb-4">
+                                <h3 class="font-semibold text-gray-700">考卷预览</h3>
+                                <div id="exam-actions" class="hidden flex gap-2">
+                                    <button onclick="copyExam()" class="px-3 py-1 text-sm bg-gray-100 rounded hover:bg-gray-200">复制</button>
+                                    <a id="download-link" href="#" target="_blank" class="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200">下载</a>
+                                </div>
+                            </div>
+                            <div id="exam-preview" class="prose max-w-none text-sm text-gray-700">
+                                <div class="text-gray-400 text-center py-20">
+                                    <p>配置考题参数后点击「生成考卷」</p>
+                                    <p class="text-sm mt-2">支持单选、多选、判断、简答等多种题型</p>
+                                    <p class="text-sm">可选择单个或多个数据库作为知识来源</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 考卷历史 -->
+            <div id="panel-history" class="p-6 tab-panel hidden">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-gray-700">已生成的考卷</h3>
+                    <button onclick="loadExams()" class="text-blue-600 hover:text-blue-800 text-sm">刷新</button>
+                </div>
+                <div id="exam-list" class="space-y-2">
+                    <div class="text-gray-400 text-center py-8">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 系统设置 -->
+            <div id="panel-settings" class="p-6 tab-panel hidden">
+                <div class="mb-6">
+                    <h3 class="font-semibold text-gray-700 text-lg">出题模型设置</h3>
+                    <p class="text-sm text-gray-500 mt-1">选择一个模型供应商并配置接入信息，测试通过后保存即可用于出题</p>
+                </div>
+
+                <div class="max-w-2xl space-y-5">
+                    <div class="bg-white border rounded-lg p-5">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">选择模型供应商</label>
+                        <select id="settings-active-provider" onchange="onSettingsProviderChange()" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 bg-white">
+                        </select>
+                    </div>
+
+                    <div id="settings-provider-form" class="bg-white border rounded-lg p-5 hidden">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-3">
+                                <h4 id="settings-provider-name" class="font-semibold text-gray-800"></h4>
+                                <span id="settings-provider-status" class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"></span>
+                            </div>
+                            <span id="settings-provider-api-type" class="text-xs text-gray-400"></span>
+                        </div>
+                        <p id="settings-provider-desc" class="text-sm text-gray-500 mb-4"></p>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">API 地址 (Base URL)</label>
+                                <input type="text" id="settings-url" placeholder="https://api.example.com/v1"
+                                    class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">API Key</label>
+                                <div class="relative">
+                                    <input type="password" id="settings-key" placeholder="输入 API Key"
+                                        class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 pr-10">
+                                    <button type="button" onclick="toggleKeyVisibility()" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">默认模型</label>
+                                <input type="text" id="settings-model" placeholder="模型名称"
+                                    class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-center gap-3">
+                            <button onclick="testCurrentConnection()" id="test-btn" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm whitespace-nowrap">
+                                🔌 测试连接
+                            </button>
+                            <div id="test-result" class="test-result text-sm"></div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3">
+                        <button onclick="saveCurrentSettings()" class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">💾 保存配置</button>
+                        <span id="settings-save-status" class="text-sm text-gray-500"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 修改数据库信息模态框 -->
+    <div id="edit-db-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-lg p-6 w-full max-w-md mx-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">修改数据库信息</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">数据库ID</label>
+                    <input id="edit-db-id" type="text" disabled class="w-full px-3 py-2 border rounded-lg bg-gray-100 text-gray-500 cursor-not-allowed">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">显示名称</label>
+                    <input id="edit-db-name" type="text" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">描述</label>
+                    <input id="edit-db-desc" type="text" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button onclick="closeEditModal()" class="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition">取消</button>
+                <button onclick="saveDatabaseEdit()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let databases = [];
+        let questionTypeCounter = 0;
+        let llmSettingsData = null;
+        const QUESTION_TYPES = {
+            single_choice: { name: '单选题', icon: '○' },
+            multi_choice: { name: '多选题', icon: '□' },
+            judge: { name: '判断题', icon: '◆' },
+            essay: { name: '简答题', icon: '✎' }
+        };
+
+        // Tab 切换
+        function switchTab(name) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
+            document.getElementById('panel-' + name).classList.remove('hidden');
+            document.getElementById('tab-' + name).classList.add('tab-active');
+
+            if (name === 'db') loadDatabases();
+            if (name === 'history') loadExams();
+            if (name === 'settings') loadSettings();
+            if (name === 'exam') loadLLMStatus();
+        }
+
+        // ========== 数据库管理 ==========
+        async function loadDatabases() {
+            try {
+                const res = await fetch(API_BASE + '/api/databases');
+                const data = await res.json();
+                databases = data.databases;
+                renderDbList();
+                updateDbSelects();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function renderDbList() {
+            const container = document.getElementById('db-list');
+            if (databases.length === 0) {
+                container.innerHTML = '<div class="text-gray-400 text-center py-8">暂无数据库，请创建</div>';
+                return;
+            }
+            container.innerHTML = databases.map(db => `
+                <div class="flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in">
+                    <div>
+                        <div class="font-medium text-gray-800">${db.name} <span class="text-xs text-gray-400">(${db.db_id})</span></div>
+                        <div class="text-sm text-gray-500">${db.description || '无描述'} · ${db.document_count} 个文档片段</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="openEditModal('${db.db_id}')" class="text-blue-500 hover:text-blue-700 text-sm px-3 py-1 rounded hover:bg-blue-50">修改</button>
+                        <button onclick="deleteDatabase('${db.db_id}')" class="text-red-500 hover:text-red-700 text-sm px-3 py-1 rounded hover:bg-red-50">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateDbSelects() {
+            const uploadSelect = document.getElementById('upload-db-id');
+            const uploadVal = uploadSelect.value;
+            uploadSelect.innerHTML = databases.map(db => `<option value="${db.db_id}">${db.name}</option>`).join('');
+            if (databases.find(d => d.db_id === uploadVal)) uploadSelect.value = uploadVal;
+
+            const examContainer = document.getElementById('exam-db-select');
+            if (databases.length === 0) {
+                examContainer.innerHTML = '<p class="text-gray-400 text-sm">请先创建数据库</p>';
+            } else {
+                examContainer.innerHTML = databases.map(db => `
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="exam-db" value="${db.db_id}" class="w-4 h-4 rounded">
+                        <span class="text-sm text-gray-700">${db.name}</span>
+                        <span class="text-xs text-gray-400">(${db.document_count} 片段)</span>
+                    </label>
+                `).join('');
+            }
+        }
+
+        async function createDatabase() {
+            const id = document.getElementById('new-db-id').value.trim();
+            const name = document.getElementById('new-db-name').value.trim();
+            const desc = document.getElementById('new-db-desc').value.trim();
+
+            if (!id || !name) { alert('请填写数据库ID和名称'); return; }
+            if (!/^[a-zA-Z0-9_]+$/.test(id)) { alert('数据库ID只能包含字母、数字和下划线'); return; }
+
+            try {
+                const res = await fetch(API_BASE + '/api/databases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ db_id: id, name, description: desc })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert('创建成功');
+                    document.getElementById('new-db-id').value = '';
+                    document.getElementById('new-db-name').value = '';
+                    document.getElementById('new-db-desc').value = '';
+                    loadDatabases();
+                } else {
+                    alert(data.detail || '创建失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + e);
+            }
+        }
+
+        async function deleteDatabase(dbId) {
+            if (!confirm(`确定删除数据库 "${dbId}" 吗？数据将无法恢复。`)) return;
+            try {
+                const res = await fetch(API_BASE + '/api/databases/' + dbId, { method: 'DELETE' });
+                if (res.ok) {
+                    loadDatabases();
+                } else {
+                    const data = await res.json();
+                    alert(data.detail || '删除失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + e);
+            }
+        }
+
+        function openEditModal(dbId) {
+            const db = databases.find(d => d.db_id === dbId);
+            if (!db) return;
+            document.getElementById('edit-db-id').value = db.db_id;
+            document.getElementById('edit-db-name').value = db.name;
+            document.getElementById('edit-db-desc').value = db.description || '';
+            const modal = document.getElementById('edit-db-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeEditModal() {
+            const modal = document.getElementById('edit-db-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function saveDatabaseEdit() {
+            const dbId = document.getElementById('edit-db-id').value;
+            const name = document.getElementById('edit-db-name').value.trim();
+            const desc = document.getElementById('edit-db-desc').value.trim();
+
+            if (!name) { alert('请填写显示名称'); return; }
+
+            try {
+                const res = await fetch(API_BASE + '/api/databases/' + dbId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, description: desc })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert('修改成功');
+                    closeEditModal();
+                    loadDatabases();
+                } else {
+                    alert(data.detail || '修改失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + e);
+            }
+        }
+
+        document.getElementById('edit-db-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeEditModal();
+        });
+
+        // ========== 文件列表 ==========
+        async function onUploadDbChange() {
+            const dbId = document.getElementById('upload-db-id').value;
+            if (!dbId) {
+                document.getElementById('db-files-section').classList.add('hidden');
+                return;
+            }
+            await loadDbFiles(dbId);
+        }
+
+        async function loadDbFiles(dbId) {
+            const section = document.getElementById('db-files-section');
+            const list = document.getElementById('db-files-list');
+            const count = document.getElementById('db-files-count');
+            list.innerHTML = '<div class="text-gray-400 text-sm text-center py-4">加载中...</div>';
+            section.classList.remove('hidden');
+
+            try {
+                const res = await fetch(API_BASE + '/api/databases/' + dbId + '/files');
+                const data = await res.json();
+                if (res.ok) {
+                    renderDbFiles(data.files);
+                } else {
+                    list.innerHTML = '<div class="text-red-400 text-sm text-center py-4">加载失败</div>';
+                    count.textContent = '';
+                }
+            } catch (e) {
+                list.innerHTML = '<div class="text-red-400 text-sm text-center py-4">加载失败</div>';
+                count.textContent = '';
+            }
+        }
+
+        function renderDbFiles(files) {
+            const list = document.getElementById('db-files-list');
+            const count = document.getElementById('db-files-count');
+            if (files.length === 0) {
+                list.innerHTML = '<div class="text-gray-400 text-sm text-center py-4">暂无文件</div>';
+                count.textContent = '';
+                return;
+            }
+            count.textContent = `共 ${files.length} 个文件`;
+            list.innerHTML = files.map(f => {
+                const typeIcon = getFileTypeIcon(f.type);
+                return `
+                    <div class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 fade-in">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="text-lg">${typeIcon}</span>
+                            <span class="text-sm text-gray-700 truncate" title="${f.filename}">${f.filename}</span>
+                        </div>
+                        <span class="text-xs text-gray-400 shrink-0 ml-2">${f.chunks} 片段</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getFileTypeIcon(type) {
+            const map = {
+                pdf: '📄', docx: '📝', xlsx: '📊', pptx: '📊',
+                txt: '📃', md: '📃', py: '🐍', js: '📜',
+                html: '🌐', json: '📋',
+                mp3: '🎵', wav: '🎵', m4a: '🎵', flac: '🎵', aac: '🎵', ogg: '🎵', wma: '🎵',
+                mp4: '🎬', avi: '🎬', mov: '🎬', mkv: '🎬', wmv: '🎬', flv: '🎬', webm: '🎬'
+            };
+            return map[type] || '📎';
+        }
+
+        // ========== 文件上传 ==========
+        function handleDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }
+        function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+        function handleDrop(e) { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); }
+
+        async function handleFiles(files) {
+            if (!files || files.length === 0) return;
+            const dbId = document.getElementById('upload-db-id').value;
+            const container = document.getElementById('upload-results');
+
+            for (const file of files) {
+                const item = document.createElement('div');
+                item.className = 'flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in';
+                item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><div class="loader"></div>`;
+                container.appendChild(item);
+
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('db_id', dbId);
+
+                try {
+                    const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (res.ok) {
+                        item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-green-600">✓ 已分块 ${data.chunks} 个</span>`;
+                    } else {
+                        item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-red-600">✗ ${data.detail || '失败'}</span>`;
+                    }
+                } catch (e) {
+                    item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-red-600">✗ 网络错误</span>`;
+                }
+            }
+            loadDatabases();
+        }
+
+        // ========== 出题配置 ==========
+        function addQuestionType() {
+            questionTypeCounter++;
+            const container = document.getElementById('question-types');
+            const div = document.createElement('div');
+            div.className = 'bg-white border rounded-lg px-3 py-2.5 fade-in overflow-hidden';
+            div.id = 'qt-' + questionTypeCounter;
+            div.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <select class="qt-type flex-1 min-w-0 px-1.5 py-1 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white">
+                        ${Object.entries(QUESTION_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.name}</option>`).join('')}
+                    </select>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <label class="text-[10px] text-gray-500 whitespace-nowrap">数量</label>
+                        <input type="number" class="qt-count w-10 px-0.5 py-1 border rounded text-sm text-center" value="10" min="1" max="100">
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <label class="text-[10px] text-gray-500 whitespace-nowrap">分值</label>
+                        <input type="number" class="qt-score w-10 px-0.5 py-1 border rounded text-sm text-center" value="2" min="1" max="100">
+                    </div>
+                    <button onclick="document.getElementById('qt-${questionTypeCounter}').remove()" title="删除" class="shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-red-500 transition-colors text-xs font-medium">✕</button>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+
+        addQuestionType();
+
+        function onExamModeChange() {
+            const mode = document.querySelector('input[name="exam-mode"]:checked').value;
+            if (mode === 'keyword') {
+                document.getElementById('exam-keyword-section').classList.remove('hidden');
+                document.getElementById('exam-file-section').classList.add('hidden');
+            } else {
+                document.getElementById('exam-keyword-section').classList.add('hidden');
+                document.getElementById('exam-file-section').classList.remove('hidden');
+                if (document.getElementById('exam-file-selects').children.length === 0) {
+                    addExamFileSelect();
+                }
+            }
+        }
+
+        function addExamFileSelect() {
+            const container = document.getElementById('exam-file-selects');
+            const id = 'efs-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 fade-in';
+            div.id = id;
+            const dbOptions = databases.map(d => `<option value="${d.db_id}">${d.name}</option>`).join('');
+            div.innerHTML = `
+                <select onchange="loadExamFilesForSelect('${id}')" class="exam-db-select flex-1 min-w-0 px-2 py-1.5 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white">
+                    <option value="">选择数据库</option>
+                    ${dbOptions}
+                </select>
+                <select class="exam-file-select flex-1 min-w-0 px-2 py-1.5 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white appearance-none" style="padding-right: 24px;">
+                    <option value="">选择文件</option>
+                </select>
+                <button onclick="document.getElementById('${id}').remove()" class="shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-red-500 transition-colors text-xs font-medium">✕</button>
+            `;
+            container.appendChild(div);
+        }
+
+        async function loadExamFilesForSelect(id) {
+            const div = document.getElementById(id);
+            const dbSelect = div.querySelector('.exam-db-select');
+            const fileSelect = div.querySelector('.exam-file-select');
+            const dbId = dbSelect.value;
+            if (!dbId) {
+                fileSelect.innerHTML = '<option value="">选择文件</option>';
+                return;
+            }
+            try {
+                const res = await fetch(API_BASE + '/api/databases/' + dbId + '/files');
+                const data = await res.json();
+                if (res.ok) {
+                    fileSelect.innerHTML = '<option value="">选择文件</option>' +
+                        data.files.map(f => `<option value="${f.filename}">${f.filename}</option>`).join('');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function generateExam() {
+            const title = document.getElementById('exam-title').value.trim();
+            const examTime = document.getElementById('exam-time').value.trim();
+            const passingScore = parseInt(document.getElementById('exam-pass').value);
+            const mergeResults = document.getElementById('merge-results').checked;
+            const mode = document.querySelector('input[name="exam-mode"]:checked').value;
+
+            if (!title) { alert('请输入考卷标题'); return; }
+
+            const questionTypes = [];
+            document.querySelectorAll('#question-types > div').forEach(div => {
+                const type = div.querySelector('.qt-type').value;
+                const count = parseInt(div.querySelector('.qt-count').value);
+                const score = parseInt(div.querySelector('.qt-score').value);
+                if (count > 0) questionTypes.push({ type, count, score_per_question: score });
+            });
+            if (questionTypes.length === 0) { alert('请至少添加一种题型'); return; }
+
+            const dbIds = Array.from(document.querySelectorAll('input[name="exam-db"]:checked')).map(cb => cb.value);
+            if (dbIds.length === 0) { alert('请至少选择一个数据库'); return; }
+
+            let payload = {
+                title, db_ids: dbIds, question_types: questionTypes,
+                exam_time: examTime, passing_score: passingScore,
+                n_results_per_query: 15, merge_db_results: mergeResults
+            };
+
+            if (mode === 'keyword') {
+                const queriesRaw = document.getElementById('exam-queries').value.trim();
+                const queries = queriesRaw.split('\n').map(q => q.trim()).filter(q => q);
+                if (queries.length === 0) { alert('请输入至少一个搜索关键词'); return; }
+                payload.queries = queries;
+            } else {
+                const sourceFiles = [];
+                document.querySelectorAll('#exam-file-selects > div').forEach(div => {
+                    const dbId = div.querySelector('.exam-db-select').value;
+                    const filename = div.querySelector('.exam-file-select').value;
+                    if (dbId && filename) sourceFiles.push({ db_id: dbId, filename });
+                });
+                if (sourceFiles.length === 0) { alert('请至少选择一个文件'); return; }
+                payload.source_files = sourceFiles;
+            }
+
+            const btn = document.getElementById('btn-generate');
+            btn.innerHTML = '<div class="loader"></div><span>生成中...</span>';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(API_BASE + '/api/exam/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    document.getElementById('exam-preview').innerHTML = '<pre class="whitespace-pre-wrap font-mono text-sm leading-relaxed">' + escapeHtml(data.preview) + '</pre>';
+                    document.getElementById('exam-actions').classList.remove('hidden');
+                    document.getElementById('download-link').href = API_BASE + '/api/exam/download/' + data.filename;
+
+                    const stats = data.stats;
+                    const totalExpected = questionTypes.reduce((a, b) => a + b.count, 0);
+                    const totalActual = stats.single + stats.multi + stats.judge + stats.essay;
+                    let statMsg = `生成完成！期望 ${totalExpected} 题，实际检测到 ${totalActual} 题`;
+                    if (totalActual < totalExpected) statMsg += '（部分题目可能缺失，请检查）';
+                    alert(statMsg);
+                } else {
+                    alert(data.detail || '生成失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + e);
+            } finally {
+                btn.innerHTML = '<span>生成考卷</span>';
+                btn.disabled = false;
+            }
+        }
+
+        function copyExam() {
+            const text = document.getElementById('exam-preview').innerText;
+            navigator.clipboard.writeText(text).then(() => alert('已复制到剪贴板'));
+        }
+
+        // ========== 考卷历史 ==========
+        async function loadExams() {
+            try {
+                const res = await fetch(API_BASE + '/api/exam/list');
+                const data = await res.json();
+                const container = document.getElementById('exam-list');
+                if (data.exams.length === 0) {
+                    container.innerHTML = '<div class="text-gray-400 text-center py-8">暂无考卷</div>';
+                    return;
+                }
+                container.innerHTML = data.exams.map(exam => `
+                    <div class="flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in">
+                        <div>
+                            <div class="font-medium text-gray-800">${exam.filename}</div>
+                            <div class="text-sm text-gray-500">${formatSize(exam.size)} · ${new Date(exam.created).toLocaleString()}</div>
+                        </div>
+                        <a href="${API_BASE}/api/exam/download/${exam.filename}" target="_blank" class="text-blue-600 hover:text-blue-800 text-sm px-3 py-1 rounded hover:bg-blue-50">下载</a>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ========== 出题面板 - 模型状态显示 ==========
+        async function loadLLMStatus() {
+            const statusText = document.getElementById('llm-status-text');
+            try {
+                const res = await fetch(API_BASE + '/api/llm/providers');
+                const data = await res.json();
+                const providers = data.providers || [];
+                const configured = providers.filter(p => p.is_configured);
+
+                if (configured.length === 0) {
+                    statusText.innerHTML = '<span class="text-yellow-600">⚠️ 未配置出题模型，请先前往设置</span>';
+                    return;
+                }
+
+                const resSettings = await fetch(API_BASE + '/api/llm/settings');
+                const settingsData = await resSettings.json();
+                const activeId = settingsData.active_provider;
+                const activeP = settingsData.providers?.[activeId];
+
+                if (activeP && activeP.is_configured) {
+                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${activeP.name} / ${activeP.model || '默认'}</span>`;
+                } else {
+                    const firstConfigured = configured[0];
+                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${firstConfigured.name} / ${firstConfigured.current_model || '默认'}</span>`;
+                }
+            } catch (e) {
+                statusText.innerHTML = '<span class="text-red-500">加载模型状态失败</span>';
+            }
+        }
+
+        // ========== 系统设置 ==========
+        async function loadSettings() {
+            try {
+                const res = await fetch(API_BASE + '/api/llm/settings');
+                const data = await res.json();
+                llmSettingsData = data;
+                renderSettingsProviderSelect(data);
+            } catch (e) {
+                console.error('加载设置失败:', e);
+            }
+        }
+
+        function renderSettingsProviderSelect(data) {
+            const select = document.getElementById('settings-active-provider');
+            let html = '';
+            for (const [pid, p] of Object.entries(data.providers)) {
+                const icon = p.is_configured ? '✅' : '⬜';
+                html += `<option value="${pid}" ${pid === data.active_provider ? 'selected' : ''}>${icon} ${p.name}</option>`;
+            }
+            select.innerHTML = html;
+            onSettingsProviderChange();
+        }
+
+        function onSettingsProviderChange() {
+            const pid = document.getElementById('settings-active-provider').value;
+            const form = document.getElementById('settings-provider-form');
+
+            if (!llmSettingsData || !llmSettingsData.providers[pid]) {
+                form.classList.add('hidden');
+                return;
+            }
+
+            const p = llmSettingsData.providers[pid];
+            form.classList.remove('hidden');
+
+            document.getElementById('settings-provider-name').textContent = p.name;
+            document.getElementById('settings-provider-desc').textContent = p.description || '';
+
+            const statusSpan = document.getElementById('settings-provider-status');
+            if (p.is_configured) {
+                statusSpan.textContent = '已配置';
+                statusSpan.className = 'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800';
+            } else {
+                statusSpan.textContent = '未配置';
+                statusSpan.className = 'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600';
+            }
+
+            const apiTypeMap = {
+                openai_compatible: 'OpenAI 兼容',
+                minimax: 'MiniMax 专有',
+                anthropic: 'Anthropic 专有'
+            };
+            document.getElementById('settings-provider-api-type').textContent = apiTypeMap[p.api_type] || p.api_type;
+
+            document.getElementById('settings-url').value = p.base_url || '';
+            document.getElementById('settings-key').value = p.api_key || '';
+            document.getElementById('settings-model').value = p.model || '';
+
+            document.getElementById('test-result').innerHTML = '';
+        }
+
+        function toggleKeyVisibility() {
+            const input = document.getElementById('settings-key');
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+
+        async function saveCurrentSettings() {
+            const pid = document.getElementById('settings-active-provider').value;
+            const p = llmSettingsData?.providers?.[pid];
+            if (!p) return;
+
+            const baseUrl = document.getElementById('settings-url').value || '';
+            const apiKey = document.getElementById('settings-key').value || '';
+            const model = document.getElementById('settings-model').value || '';
+
+            const providers = [{
+                provider_id: pid,
+                base_url: baseUrl,
+                api_key: apiKey,
+                model: model,
+                api_type: p.api_type || 'openai_compatible'
+            }];
+
+            try {
+                const res = await fetch(API_BASE + '/api/llm/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ active_provider: pid, providers: providers })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    document.getElementById('settings-save-status').textContent = '✓ 配置已保存，该模型将用于出题';
+                    setTimeout(() => { document.getElementById('settings-save-status').textContent = ''; }, 3000);
+                    loadSettings();
+                    loadLLMStatus();
+                } else {
+                    alert(data.detail || '保存失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + e);
+            }
+        }
+
+        async function testCurrentConnection() {
+            const pid = document.getElementById('settings-active-provider').value;
+            const p = llmSettingsData?.providers?.[pid];
+            if (!p) return;
+
+            const baseUrl = document.getElementById('settings-url').value || '';
+            const apiKey = document.getElementById('settings-key').value || '';
+            const model = document.getElementById('settings-model').value || '';
+
+            const btn = document.getElementById('test-btn');
+            const resultDiv = document.getElementById('test-result');
+
+            if (!apiKey) {
+                resultDiv.innerHTML = '<span class="text-red-600">❌ 请先填写 API Key</span>';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loader" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;"></div> 测试中...';
+            resultDiv.innerHTML = '<span class="text-gray-500">正在连接...</span>';
+
+            try {
+                const res = await fetch(API_BASE + '/api/llm/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider_id: pid,
+                        base_url: baseUrl,
+                        api_key: apiKey,
+                        model: model,
+                        api_type: p.api_type || 'openai_compatible'
+                    })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    resultDiv.innerHTML = `<span class="text-green-600">✅ ${data.message}</span>`;
+                } else {
+                    resultDiv.innerHTML = `<span class="text-red-600">❌ ${data.message}</span>`;
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `<span class="text-red-600">❌ 请求失败: ${e}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🔌 测试连接';
+            }
+        }
+
+        // 初始化
+        loadDatabases();
+        loadLLMStatus();
+    </script>
+</body>
+</html>

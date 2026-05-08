@@ -1,0 +1,43 @@
+# ========== Git 忽略 + 打包排除 ==========
+
+# Claude Code 本地配置
+.claude/
+
+# 开发环境虚拟环境（打包必须排除）
+.venv/
+
+# Python 缓存（打包必须排除）
+__pycache__/
+*.pyc
+*.pyo
+
+# Git 仓库数据（打包必须排除）
+.git/
+
+# 密钥文件（打包必须排除）
+.env
+
+# 运行时生成的数据文件（打包必须排除）
+storage/exams/
+storage/files/
+storage/vectors/
+storage/db_registry.json
+storage/llm_config.json
+
+# 临时下载文件（打包必须排除）
+*.zip
+python-embed.zip
+get-pip.py
+
+# ========== 仅 Git 忽略（打包时需要包含！） ==========
+# 便携版嵌入式 Python 运行时（打包必需，但不入 git）
+python/
+
+# 本地 AI 模型（打包必需，但不入 git）
+models/bge-m3/
+models/whisper/
+
+# FFmpeg 二进制（打包必需，但不入 git）
+ffmpeg.exe
+bin/ffmpeg.exe
+ffmpeg-*/
