@@ -18,6 +18,12 @@
 
 ---
 
+## 使用流程
+
+![使用流程](exam_generator_flow.png)
+
+---
+
 ## 技术栈
 
 - **后端**: FastAPI + Uvicorn

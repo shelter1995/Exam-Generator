@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 900" width="960" height="900">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica Neue, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+  </style>
+  <defs>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10a37f"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#71717a"/>
+    </marker>
+  </defs>
+
+  <!-- White background -->
+  <rect width="960" height="900" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="480" y="42" text-anchor="middle" fill="#0d0d0d" font-size="22" font-weight="600">智能知识库出题系统 — 使用流程</text>
+
+  <!-- Node 1 (accent) -->
+  <rect x="300" y="66" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <rect x="300" y="66" width="4" height="48" rx="2" ry="2" fill="#10a37f"/>
+  <text x="480" y="88" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">启动 FastAPI 服务</text>
+  <text x="480" y="106" text-anchor="middle" fill="#6e6e80" font-size="12">python main.py / 启动.bat</text>
+
+  <!-- Node 2 -->
+  <rect x="300" y="146" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="168" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">访问 Web 管理界面</text>
+  <text x="480" y="186" text-anchor="middle" fill="#6e6e80" font-size="12">浏览器打开 127.0.0.1:8000</text>
+
+  <!-- Node 3 -->
+  <rect x="300" y="226" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="248" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">创建/选择知识库</text>
+  <text x="480" y="266" text-anchor="middle" fill="#6e6e80" font-size="12">设置数据库名称与描述</text>
+
+  <!-- Node 4 -->
+  <rect x="300" y="306" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="328" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">上传学习资料</text>
+  <text x="480" y="346" text-anchor="middle" fill="#6e6e80" font-size="12">PDF / DOCX / XLSX / 音频 / 视频</text>
+
+  <!-- Node 5 -->
+  <rect x="300" y="386" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="408" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">文件解析 &amp; 文本切分</text>
+  <text x="480" y="426" text-anchor="middle" fill="#6e6e80" font-size="12">parser.py 提取内容，滑动窗口切分</text>
+
+  <!-- Node 6 (accent) -->
+  <rect x="300" y="466" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <rect x="300" y="466" width="4" height="48" rx="2" ry="2" fill="#10a37f"/>
+  <text x="480" y="488" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">文本嵌入 &amp; 向量存储</text>
+  <text x="480" y="506" text-anchor="middle" fill="#6e6e80" font-size="12">BGE-M3 嵌入，存入 ChromaDB</text>
+
+  <!-- Node 7 -->
+  <rect x="300" y="546" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="568" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">配置出题参数</text>
+  <text x="480" y="586" text-anchor="middle" fill="#6e6e80" font-size="12">题型、数量、难度、LLM 提供商选择</text>
+
+  <!-- Node 8 -->
+  <rect x="300" y="626" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <text x="480" y="648" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">语义检索知识点</text>
+  <text x="480" y="666" text-anchor="middle" fill="#6e6e80" font-size="12">向量相似度搜索 top-k 相关片段</text>
+
+  <!-- Node 9 (accent) -->
+  <rect x="300" y="706" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <rect x="300" y="706" width="4" height="48" rx="2" ry="2" fill="#10a37f"/>
+  <text x="480" y="728" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">LLM 分批生成考卷</text>
+  <text x="480" y="746" text-anchor="middle" fill="#6e6e80" font-size="12">按题型分批次调用，自动格式后处理</text>
+
+  <!-- Node 10 (accent) -->
+  <rect x="300" y="786" width="360" height="48" rx="8" ry="8" fill="#ffffff" stroke="#e5e5e5" stroke-width="1.5"/>
+  <rect x="300" y="786" width="4" height="48" rx="2" ry="2" fill="#10a37f"/>
+  <text x="480" y="808" text-anchor="middle" fill="#0d0d0d" font-size="15" font-weight="600">下载 Markdown 考卷</text>
+  <text x="480" y="826" text-anchor="middle" fill="#6e6e80" font-size="12">含答案解析的标准化考卷</text>
+
+  <line x1="480" y1="114" x2="480" y2="146" stroke="#71717a" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+  <line x1="480" y1="194" x2="480" y2="226" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="274" x2="480" y2="306" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="354" x2="480" y2="386" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="434" x2="480" y2="466" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="514" x2="480" y2="546" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="594" x2="480" y2="626" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="674" x2="480" y2="706" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="480" y1="754" x2="480" y2="786" stroke="#10a37f" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+</svg>

@@ -1,5 +1,9 @@
 # ========== Git 忽略 + 打包排除 ==========
 
+# AI 助手配置（本地生成，不入版本库）
+AGENTS.md
+SESSION.md
+
 # Claude Code 本地配置
 .claude/
 
@@ -41,3 +45,6 @@ models/whisper/
 ffmpeg.exe
 bin/ffmpeg.exe
 ffmpeg-*/
+
+# 流程图临时预览文件
+exam_generator_flow.html
