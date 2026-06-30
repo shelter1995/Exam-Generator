@@ -103,6 +103,11 @@
                             <p class="text-sm text-gray-400 mt-1">支持批量上传多个文件</p>
                             <input id="file-input" type="file" multiple class="hidden" onchange="handleFiles(this.files)">
                         </div>
+                        <div id="upload-queue-summary" class="hidden grid grid-cols-3 gap-2 text-sm">
+                            <div class="bg-green-50 text-green-700 rounded-lg px-3 py-2">已处理 <span id="upload-done-count">0</span></div>
+                            <div class="bg-blue-50 text-blue-700 rounded-lg px-3 py-2">正在处理 <span id="upload-running-count">0</span></div>
+                            <div class="bg-gray-100 text-gray-600 rounded-lg px-3 py-2">等待处理 <span id="upload-waiting-count">0</span></div>
+                        </div>
                         <div id="upload-results" class="space-y-2"></div>
                         <div id="db-files-section" class="hidden">
                             <div class="flex items-center justify-between mb-2">
@@ -165,6 +170,23 @@
                                 <div>
                                     <label class="block text-sm text-gray-600 mb-1">合格线（分）</label>
                                     <input id="exam-pass" type="number" value="60" min="0" max="100" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">难度比例（合计 100%）</label>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <div>
+                                            <span class="block text-xs text-gray-500 mb-1">基础</span>
+                                            <input id="difficulty-basic" type="number" value="50" min="0" max="100" class="w-full px-2 py-2 border rounded-lg text-center focus:ring-2 focus:ring-blue-500">
+                                        </div>
+                                        <div>
+                                            <span class="block text-xs text-gray-500 mb-1">理解</span>
+                                            <input id="difficulty-understanding" type="number" value="35" min="0" max="100" class="w-full px-2 py-2 border rounded-lg text-center focus:ring-2 focus:ring-blue-500">
+                                        </div>
+                                        <div>
+                                            <span class="block text-xs text-gray-500 mb-1">应用</span>
+                                            <input id="difficulty-application" type="number" value="15" min="0" max="100" class="w-full px-2 py-2 border rounded-lg text-center focus:ring-2 focus:ring-blue-500">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -320,6 +342,7 @@
         let databases = [];
         let questionTypeCounter = 0;
         let llmSettingsData = null;
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         const QUESTION_TYPES = {
             single_choice: { name: '单选题', icon: '○' },
             multi_choice: { name: '多选题', icon: '□' },
@@ -335,9 +358,16 @@
             document.getElementById('tab-' + name).classList.add('tab-active');
 
             if (name === 'db') loadDatabases();
+            if (name === 'upload') openUploadTab();
             if (name === 'history') loadExams();
             if (name === 'settings') loadSettings();
             if (name === 'exam') loadLLMStatus();
+        }
+
+        async function openUploadTab() {
+            await loadDatabases();
+            const dbId = document.getElementById('upload-db-id').value;
+            if (dbId) await loadDbFiles(dbId);
         }
 
         // ========== 数据库管理 ==========
@@ -362,8 +392,8 @@
             container.innerHTML = databases.map(db => `
                 <div class="flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in">
                     <div>
-                        <div class="font-medium text-gray-800">${db.name} <span class="text-xs text-gray-400">(${db.db_id})</span></div>
-                        <div class="text-sm text-gray-500">${db.description || '无描述'} · ${db.document_count} 个文档片段</div>
+                        <div class="font-medium text-gray-800">${escapeHtml(db.name)} <span class="text-xs text-gray-400">(${escapeHtml(db.db_id)})</span></div>
+                        <div class="text-sm text-gray-500">${escapeHtml(db.description || '无描述')} · ${db.document_count} 个文档片段</div>
                     </div>
                     <div class="flex items-center gap-2">
                         <button onclick="openEditModal('${db.db_id}')" class="text-blue-500 hover:text-blue-700 text-sm px-3 py-1 rounded hover:bg-blue-50">修改</button>
@@ -376,7 +406,7 @@
         function updateDbSelects() {
             const uploadSelect = document.getElementById('upload-db-id');
             const uploadVal = uploadSelect.value;
-            uploadSelect.innerHTML = databases.map(db => `<option value="${db.db_id}">${db.name}</option>`).join('');
+            uploadSelect.innerHTML = databases.map(db => `<option value="${escapeHtml(db.db_id)}">${escapeHtml(db.name)}</option>`).join('');
             if (databases.find(d => d.db_id === uploadVal)) uploadSelect.value = uploadVal;
 
             const examContainer = document.getElementById('exam-db-select');
@@ -385,8 +415,8 @@
             } else {
                 examContainer.innerHTML = databases.map(db => `
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="exam-db" value="${db.db_id}" class="w-4 h-4 rounded">
-                        <span class="text-sm text-gray-700">${db.name}</span>
+                        <input type="checkbox" name="exam-db" value="${escapeHtml(db.db_id)}" class="w-4 h-4 rounded">
+                        <span class="text-sm text-gray-700">${escapeHtml(db.name)}</span>
                         <span class="text-xs text-gray-400">(${db.document_count} 片段)</span>
                     </label>
                 `).join('');
@@ -399,7 +429,7 @@
             const desc = document.getElementById('new-db-desc').value.trim();
 
             if (!id || !name) { alert('请填写数据库ID和名称'); return; }
-            if (!/^[a-zA-Z0-9_]+$/.test(id)) { alert('数据库ID只能包含字母、数字和下划线'); return; }
+            if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id)) { alert('数据库ID只能包含字母、数字、下划线和短横线，长度 1-64'); return; }
 
             try {
                 const res = await fetch(API_BASE + '/api/databases', {
@@ -425,7 +455,7 @@
         async function deleteDatabase(dbId) {
             if (!confirm(`确定删除数据库 "${dbId}" 吗？数据将无法恢复。`)) return;
             try {
-                const res = await fetch(API_BASE + '/api/databases/' + dbId, { method: 'DELETE' });
+                const res = await fetch(API_BASE + '/api/databases/' + encodeURIComponent(dbId), { method: 'DELETE' });
                 if (res.ok) {
                     loadDatabases();
                 } else {
@@ -462,7 +492,7 @@
             if (!name) { alert('请填写显示名称'); return; }
 
             try {
-                const res = await fetch(API_BASE + '/api/databases/' + dbId, {
+                const res = await fetch(API_BASE + '/api/databases/' + encodeURIComponent(dbId), {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name, description: desc })
@@ -502,7 +532,7 @@
             section.classList.remove('hidden');
 
             try {
-                const res = await fetch(API_BASE + '/api/databases/' + dbId + '/files');
+                const res = await fetch(API_BASE + '/api/databases/' + encodeURIComponent(dbId) + '/files');
                 const data = await res.json();
                 if (res.ok) {
                     renderDbFiles(data.files);
@@ -531,7 +561,7 @@
                     <div class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 fade-in">
                         <div class="flex items-center gap-2 min-w-0">
                             <span class="text-lg">${typeIcon}</span>
-                            <span class="text-sm text-gray-700 truncate" title="${f.filename}">${f.filename}</span>
+                            <span class="text-sm text-gray-700 truncate" title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
                         </div>
                         <span class="text-xs text-gray-400 shrink-0 ml-2">${f.chunks} 片段</span>
                     </div>
@@ -555,34 +585,77 @@
         function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
         function handleDrop(e) { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); }
 
+        async function waitForTask(taskId, onUpdate) {
+            while (true) {
+                const res = await fetch(API_BASE + '/api/tasks/' + encodeURIComponent(taskId));
+                const task = await res.json();
+                if (!res.ok) throw new Error(task.detail || '任务不存在');
+                if (onUpdate) onUpdate(task);
+                if (task.status === 'success') return task.result;
+                if (task.status === 'failed') throw new Error(task.error || '任务失败');
+                await sleep(1000);
+            }
+        }
+
         async function handleFiles(files) {
             if (!files || files.length === 0) return;
             const dbId = document.getElementById('upload-db-id').value;
             const container = document.getElementById('upload-results');
+            const summary = document.getElementById('upload-queue-summary');
+            let doneCount = 0;
+            let runningCount = 0;
+            let waitingCount = files.length;
+            summary.classList.remove('hidden');
+            updateUploadCounts(doneCount, runningCount, waitingCount);
 
+            const queue = [];
             for (const file of files) {
                 const item = document.createElement('div');
                 item.className = 'flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in';
-                item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><div class="loader"></div>`;
+                item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(file.name)}</span><span class="text-sm text-gray-500">等待处理</span>`;
                 container.appendChild(item);
+                queue.push({ file, item });
+            }
 
+            for (const entry of queue) {
+                const file = entry.file;
+                const item = entry.item;
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('db_id', dbId);
 
                 try {
-                    const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: formData });
+                    waitingCount--;
+                    runningCount = 1;
+                    updateUploadCounts(doneCount, runningCount, waitingCount);
+                    item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(file.name)}</span><div class="flex items-center gap-2 text-blue-600 text-sm"><div class="loader" style="width:16px;height:16px;border-width:2px;"></div><span>正在处理</span></div>`;
+                    const res = await fetch(API_BASE + '/api/upload/task', { method: 'POST', body: formData });
                     const data = await res.json();
                     if (res.ok) {
-                        item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-green-600">✓ 已分块 ${data.chunks} 个</span>`;
+                        item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(file.name)}</span><span class="text-sm text-blue-600">处理中...</span>`;
+                        const result = await waitForTask(data.task_id);
+                        item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(result.filename)}</span><span class="text-sm text-green-600">✓ 已分块 ${result.chunks} 个</span>`;
+                        doneCount++;
                     } else {
-                        item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-red-600">✗ ${data.detail || '失败'}</span>`;
+                        item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(file.name)}</span><span class="text-sm text-red-600">✗ ${escapeHtml(data.detail || '失败')}</span>`;
+                        doneCount++;
                     }
                 } catch (e) {
-                    item.innerHTML = `<span class="text-sm text-gray-700">${file.name}</span><span class="text-sm text-red-600">✗ 网络错误</span>`;
+                    item.innerHTML = `<span class="text-sm text-gray-700">${escapeHtml(file.name)}</span><span class="text-sm text-red-600">✗ ${escapeHtml(e.message || '网络错误')}</span>`;
+                    doneCount++;
+                } finally {
+                    runningCount = 0;
+                    updateUploadCounts(doneCount, runningCount, waitingCount);
                 }
             }
             loadDatabases();
+            if (dbId) loadDbFiles(dbId);
+        }
+
+        function updateUploadCounts(done, running, waiting) {
+            document.getElementById('upload-done-count').textContent = done;
+            document.getElementById('upload-running-count').textContent = running;
+            document.getElementById('upload-waiting-count').textContent = waiting;
         }
 
         // ========== 出题配置 ==========
@@ -633,7 +706,7 @@
             const div = document.createElement('div');
             div.className = 'flex items-center gap-2 fade-in';
             div.id = id;
-            const dbOptions = databases.map(d => `<option value="${d.db_id}">${d.name}</option>`).join('');
+            const dbOptions = databases.map(d => `<option value="${escapeHtml(d.db_id)}">${escapeHtml(d.name)}</option>`).join('');
             div.innerHTML = `
                 <select onchange="loadExamFilesForSelect('${id}')" class="exam-db-select flex-1 min-w-0 px-2 py-1.5 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white">
                     <option value="">选择数据库</option>
@@ -657,11 +730,11 @@
                 return;
             }
             try {
-                const res = await fetch(API_BASE + '/api/databases/' + dbId + '/files');
+                const res = await fetch(API_BASE + '/api/databases/' + encodeURIComponent(dbId) + '/files');
                 const data = await res.json();
                 if (res.ok) {
                     fileSelect.innerHTML = '<option value="">选择文件</option>' +
-                        data.files.map(f => `<option value="${f.filename}">${f.filename}</option>`).join('');
+                        data.files.map(f => `<option value="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</option>`).join('');
                 }
             } catch (e) {
                 console.error(e);
@@ -672,10 +745,17 @@
             const title = document.getElementById('exam-title').value.trim();
             const examTime = document.getElementById('exam-time').value.trim();
             const passingScore = parseInt(document.getElementById('exam-pass').value);
+            const difficultyBasic = parseInt(document.getElementById('difficulty-basic').value);
+            const difficultyUnderstanding = parseInt(document.getElementById('difficulty-understanding').value);
+            const difficultyApplication = parseInt(document.getElementById('difficulty-application').value);
             const mergeResults = document.getElementById('merge-results').checked;
             const mode = document.querySelector('input[name="exam-mode"]:checked').value;
 
             if (!title) { alert('请输入考卷标题'); return; }
+            if (difficultyBasic + difficultyUnderstanding + difficultyApplication !== 100) {
+                alert('难度比例合计必须为 100%');
+                return;
+            }
 
             const questionTypes = [];
             document.querySelectorAll('#question-types > div').forEach(div => {
@@ -692,7 +772,10 @@
             let payload = {
                 title, db_ids: dbIds, question_types: questionTypes,
                 exam_time: examTime, passing_score: passingScore,
-                n_results_per_query: 15, merge_db_results: mergeResults
+                n_results_per_query: 15, merge_db_results: mergeResults,
+                difficulty_basic: difficultyBasic,
+                difficulty_understanding: difficultyUnderstanding,
+                difficulty_application: difficultyApplication
             };
 
             if (mode === 'keyword') {
@@ -716,7 +799,7 @@
             btn.disabled = true;
 
             try {
-                const res = await fetch(API_BASE + '/api/exam/generate', {
+                const res = await fetch(API_BASE + '/api/exam/generate/task', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -724,11 +807,17 @@
                 const data = await res.json();
 
                 if (res.ok) {
-                    document.getElementById('exam-preview').innerHTML = '<pre class="whitespace-pre-wrap font-mono text-sm leading-relaxed">' + escapeHtml(data.preview) + '</pre>';
+                    document.getElementById('exam-preview').innerHTML = '<div class="flex items-center justify-center gap-3 text-gray-500 py-20"><div class="loader"></div><span>正在生成考卷...</span></div>';
+                    const result = await waitForTask(data.task_id, task => {
+                        if (task.status === 'running') {
+                            document.getElementById('exam-preview').innerHTML = '<div class="flex items-center justify-center gap-3 text-gray-500 py-20"><div class="loader"></div><span>模型生成中，请稍候...</span></div>';
+                        }
+                    });
+                    document.getElementById('exam-preview').innerHTML = '<pre class="whitespace-pre-wrap font-mono text-sm leading-relaxed">' + escapeHtml(result.preview) + '</pre>';
                     document.getElementById('exam-actions').classList.remove('hidden');
-                    document.getElementById('download-link').href = API_BASE + '/api/exam/download/' + data.filename;
+                    document.getElementById('download-link').href = API_BASE + '/api/exam/download/' + encodeURIComponent(result.filename);
 
-                    const stats = data.stats;
+                    const stats = result.stats;
                     const totalExpected = questionTypes.reduce((a, b) => a + b.count, 0);
                     const totalActual = stats.single + stats.multi + stats.judge + stats.essay;
                     let statMsg = `生成完成！期望 ${totalExpected} 题，实际检测到 ${totalActual} 题`;
@@ -738,7 +827,7 @@
                     alert(data.detail || '生成失败');
                 }
             } catch (e) {
-                alert('请求失败: ' + e);
+                alert('请求失败: ' + (e.message || e));
             } finally {
                 btn.innerHTML = '<span>生成考卷</span>';
                 btn.disabled = false;
@@ -763,14 +852,32 @@
                 container.innerHTML = data.exams.map(exam => `
                     <div class="flex items-center justify-between bg-gray-50 rounded-lg p-3 fade-in">
                         <div>
-                            <div class="font-medium text-gray-800">${exam.filename}</div>
+                            <div class="font-medium text-gray-800">${escapeHtml(exam.filename)}</div>
                             <div class="text-sm text-gray-500">${formatSize(exam.size)} · ${new Date(exam.created).toLocaleString()}</div>
                         </div>
-                        <a href="${API_BASE}/api/exam/download/${exam.filename}" target="_blank" class="text-blue-600 hover:text-blue-800 text-sm px-3 py-1 rounded hover:bg-blue-50">下载</a>
+                        <div class="flex items-center gap-2">
+                            <a href="${API_BASE}/api/exam/download/${encodeURIComponent(exam.filename)}" target="_blank" class="text-blue-600 hover:text-blue-800 text-sm px-3 py-1 rounded hover:bg-blue-50">下载</a>
+                            <button onclick="deleteExam('${escapeHtml(exam.filename)}')" class="text-red-600 hover:text-red-800 text-sm px-3 py-1 rounded hover:bg-red-50">删除</button>
+                        </div>
                     </div>
                 `).join('');
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        async function deleteExam(filename) {
+            if (!confirm(`确定删除考卷 "${filename}" 吗？`)) return;
+            try {
+                const res = await fetch(API_BASE + '/api/exam/' + encodeURIComponent(filename), { method: 'DELETE' });
+                const data = await res.json();
+                if (res.ok) {
+                    loadExams();
+                } else {
+                    alert(data.detail || '删除失败');
+                }
+            } catch (e) {
+                alert('请求失败: ' + (e.message || e));
             }
         }
 
@@ -806,10 +913,10 @@
                 const activeP = settingsData.providers?.[activeId];
 
                 if (activeP && activeP.is_configured) {
-                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${activeP.name} / ${activeP.model || '默认'}</span>`;
+                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${escapeHtml(activeP.name)} / ${escapeHtml(activeP.model || '默认')}</span>`;
                 } else {
                     const firstConfigured = configured[0];
-                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${firstConfigured.name} / ${firstConfigured.current_model || '默认'}</span>`;
+                    statusText.innerHTML = `<span class="text-green-600">🤖 当前模型：${escapeHtml(firstConfigured.name)} / ${escapeHtml(firstConfigured.current_model || '默认')}</span>`;
                 }
             } catch (e) {
                 statusText.innerHTML = '<span class="text-red-500">加载模型状态失败</span>';
@@ -833,7 +940,7 @@
             let html = '';
             for (const [pid, p] of Object.entries(data.providers)) {
                 const icon = p.is_configured ? '✅' : '⬜';
-                html += `<option value="${pid}" ${pid === data.active_provider ? 'selected' : ''}>${icon} ${p.name}</option>`;
+                html += `<option value="${escapeHtml(pid)}" ${pid === data.active_provider ? 'selected' : ''}>${icon} ${escapeHtml(p.name)}</option>`;
             }
             select.innerHTML = html;
             onSettingsProviderChange();
@@ -955,12 +1062,12 @@
                 const data = await res.json();
 
                 if (data.success) {
-                    resultDiv.innerHTML = `<span class="text-green-600">✅ ${data.message}</span>`;
+                    resultDiv.innerHTML = `<span class="text-green-600">✅ ${escapeHtml(data.message)}</span>`;
                 } else {
-                    resultDiv.innerHTML = `<span class="text-red-600">❌ ${data.message}</span>`;
+                    resultDiv.innerHTML = `<span class="text-red-600">❌ ${escapeHtml(data.message)}</span>`;
                 }
             } catch (e) {
-                resultDiv.innerHTML = `<span class="text-red-600">❌ 请求失败: ${e}</span>`;
+                resultDiv.innerHTML = `<span class="text-red-600">❌ 请求失败: ${escapeHtml(String(e))}</span>`;
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '🔌 测试连接';

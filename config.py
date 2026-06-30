@@ -14,9 +14,11 @@ load_dotenv(BASE_DIR / ".env")
 STORAGE_DIR = BASE_DIR / "storage"
 FILES_DIR = STORAGE_DIR / "files"
 VECTORS_DIR = STORAGE_DIR / "vectors"
+EXAMS_DIR = STORAGE_DIR / "exams"
 
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 VECTORS_DIR.mkdir(parents=True, exist_ok=True)
+EXAMS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 支持的文件类型
 SUPPORTED_DOCUMENTS = [".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".py", ".js", ".html", ".json"]
@@ -62,6 +64,13 @@ CHUNK_OVERLAP = 50
 # API 配置
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
+API_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("API_CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "200"))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 # MiniMax
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")

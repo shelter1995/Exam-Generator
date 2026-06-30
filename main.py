@@ -10,27 +10,28 @@ if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
 import logging
-import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-
-# UTF-8
-import io
-sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding='utf-8')
 
 from llm import get_available_providers
 import config
 from database import db_manager
 from parser import parse
 from exam import generate_exam, count_questions
+from security import (
+    ensure_safe_child_path,
+    sanitize_upload_filename,
+    unique_child_path,
+    validate_db_id,
+)
+from tasks import TaskManager
 from models import (
     CreateDatabaseRequest, UpdateDatabaseRequest, SearchRequest,
     GenerateExamRequest, ExamPreview, DatabaseInfo,
@@ -41,11 +42,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="智能知识库出题系统", version="2.0.0")
+task_manager = TaskManager(max_workers=2)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=config.API_CORS_ORIGINS or ["*"],
+    allow_credentials="*" not in config.API_CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -63,6 +65,34 @@ def root():
     return FileResponse(str(static_dir / "index.html"))
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
+
+
+@app.get("/api/health")
+def health_check():
+    """健康检查"""
+    from embedding import embedder
+
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "databases": len(db_manager.databases),
+        "embedding_loaded": embedder.is_loaded,
+        "max_upload_size_mb": config.MAX_UPLOAD_SIZE_MB,
+    }
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: str):
+    """查询后台任务状态"""
+    try:
+        return task_manager.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+
 # ========== 数据库管理 ==========
 
 @app.get("/api/databases")
@@ -75,6 +105,7 @@ def list_databases():
 def create_database(req: CreateDatabaseRequest):
     """创建新数据库"""
     try:
+        validate_db_id(req.db_id)
         db = db_manager.create(req.db_id, req.name, req.description)
         return {"status": "success", "db_id": req.db_id, "name": req.name}
     except ValueError as e:
@@ -85,6 +116,7 @@ def create_database(req: CreateDatabaseRequest):
 def delete_database(db_id: str):
     """删除数据库"""
     try:
+        validate_db_id(db_id)
         db_manager.delete(db_id)
         return {"status": "success", "message": f"数据库 {db_id} 已删除"}
     except ValueError as e:
@@ -95,6 +127,7 @@ def delete_database(db_id: str):
 def update_database(db_id: str, req: UpdateDatabaseRequest):
     """修改数据库信息"""
     try:
+        validate_db_id(db_id)
         db = db_manager.update(db_id, req.name, req.description)
         return {"status": "success", "db_id": db_id, "name": db.name, "description": db.description}
     except ValueError as e:
@@ -105,6 +138,7 @@ def update_database(db_id: str, req: UpdateDatabaseRequest):
 def list_database_files(db_id: str):
     """列出数据库中已有的文件"""
     try:
+        validate_db_id(db_id)
         db = db_manager.get(db_id)
         files = db.list_files()
         return {"db_id": db_id, "files": files}
@@ -114,38 +148,63 @@ def list_database_files(db_id: str):
 
 # ========== 文件上传 ==========
 
+def _save_upload(file: UploadFile) -> Path:
+    safe_name = sanitize_upload_filename(file.filename or "", config.ALL_SUPPORTED)
+    file_path = unique_child_path(config.FILES_DIR, safe_name)
+    written = 0
+    with open(file_path, "wb") as buffer:
+        while True:
+            chunk = file.file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > config.MAX_UPLOAD_SIZE_BYTES:
+                file_path.unlink(missing_ok=True)
+                raise ValueError(f"文件超过大小限制：{config.MAX_UPLOAD_SIZE_MB} MB")
+            buffer.write(chunk)
+    return file_path
+
+
+def _ingest_saved_file(file_path: Path, db_id: str) -> dict:
+    validate_db_id(db_id)
+    db = db_manager.get(db_id)
+    result = parse(str(file_path), db_id=db_id)
+    if result["texts"]:
+        db.add(result["texts"], result["metadatas"], result["ids"])
+    return {
+        "status": "success",
+        "filename": file_path.name,
+        "db_id": db_id,
+        "chunks": len(result["texts"])
+    }
+
+
 @app.post("/api/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    db_id: str = Form("default")
-):
+async def upload_file(file: UploadFile = File(...), db_id: str = Form("default")):
     """上传文件到指定数据库"""
     try:
-        # 检查数据库
-        db = db_manager.get(db_id)
-
-        # 保存文件
-        file_path = config.FILES_DIR / file.filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # 解析文件
-        result = parse(str(file_path), db_id=db_id)
-
-        # 入库
-        if result["texts"]:
-            db.add(result["texts"], result["metadatas"], result["ids"])
-
-        return {
-            "status": "success",
-            "filename": file.filename,
-            "db_id": db_id,
-            "chunks": len(result["texts"])
-        }
+        validate_db_id(db_id)
+        file_path = _save_upload(file)
+        return _ingest_saved_file(file_path, db_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/upload/task")
+async def upload_file_task(file: UploadFile = File(...), db_id: str = Form("default")):
+    """上传文件并创建后台入库任务"""
+    try:
+        validate_db_id(db_id)
+        file_path = _save_upload(file)
+        task_id = task_manager.submit(f"上传入库: {file_path.name}", _ingest_saved_file, file_path, db_id)
+        return {"status": "accepted", "task_id": task_id, "filename": file_path.name, "db_id": db_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建上传任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -171,6 +230,9 @@ async def upload_batch(
 def search(req: SearchRequest):
     """知识库搜索"""
     try:
+        if req.db_ids:
+            for db_id in req.db_ids:
+                validate_db_id(db_id)
         if req.db_ids and len(req.db_ids) > 0:
             results = db_manager.search(req.query, req.db_ids, req.n_results)
         else:
@@ -182,98 +244,107 @@ def search(req: SearchRequest):
 
 # ========== 出题 ==========
 
+def _generate_exam_response(req: GenerateExamRequest) -> dict:
+    for db_id in req.db_ids:
+        validate_db_id(db_id)
+
+    # 1. 从多个数据库检索知识
+    all_results = []
+
+    if req.source_files and len(req.source_files) > 0:
+        # 按文件出题模式
+        for sf in req.source_files:
+            try:
+                validate_db_id(sf.db_id)
+                db = db_manager.get(sf.db_id)
+                results = db.get_by_source(sf.filename)
+                all_results.extend(results)
+            except Exception as e:
+                logger.warning(f"获取文件 {sf.filename} 失败: {e}")
+    else:
+        # 1. 从多个数据库检索知识
+        for query in req.queries:
+            if req.merge_db_results:
+                # 合并所有指定数据库的结果
+                for db_id in req.db_ids:
+                    try:
+                        db = db_manager.get(db_id)
+                        results = db.search(query, req.n_results_per_query)
+                        all_results.extend(results)
+                    except Exception as e:
+                        logger.warning(f"搜索数据库 {db_id} 失败: {e}")
+            else:
+                # 分别搜索每个数据库（取Top K）
+                db_results = db_manager.search(query, req.db_ids, req.n_results_per_query)
+                for db_id, results in db_results.items():
+                    all_results.extend(results)
+
+    # 去重并按相关度排序
+    seen = set()
+    unique_results = []
+    for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
+        key = r["text"][:100]
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+
+    if not unique_results:
+        raise HTTPException(status_code=400, detail="未检索到任何知识内容，请先上传文件")
+
+    # 2. 生成考卷
+    exam_md = generate_exam(
+        title=req.title,
+        knowledge_results=unique_results,
+        question_types=req.question_types,
+        exam_time=req.exam_time,
+        passing_score=req.passing_score,
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        difficulty_distribution={
+            "basic": req.difficulty_basic,
+            "understanding": req.difficulty_understanding,
+            "application": req.difficulty_application,
+        }
+    )
+
+    # 3. 统计
+    stats = count_questions(exam_md)
+    total_questions = sum(q.count for q in req.question_types)
+
+    # 4. 保存文件
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = "".join(c if c.isalnum() or c in "_-" else "_" for c in req.title).strip("_") or "exam"
+    filename = f"{safe_title}_{timestamp}.md"
+    filepath = ensure_safe_child_path(config.EXAMS_DIR, filename)
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(exam_md)
+        f.write(f"\n\n---\n\n")
+        f.write(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"**数据来源**: {', '.join(req.db_ids)}\n")
+        f.write(f"**搜索关键词**: {', '.join(req.queries)}\n")
+        f.write(f"**题目统计**: 单选 {stats['single']} | 多选 {stats['multi']} | 判断 {stats['judge']} | 简答 {stats['essay']}\n")
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "filepath": str(filepath),
+        "preview": exam_md[:2000],
+        "stats": {
+            "expected": total_questions,
+            "single": stats["single"],
+            "multi": stats["multi"],
+            "judge": stats["judge"],
+            "essay": stats["essay"]
+        }
+    }
+
+
 @app.post("/api/exam/generate")
 def generate_exam_endpoint(req: GenerateExamRequest):
     """生成考题（支持关键词搜索或按文件出题）"""
     try:
-        # 1. 从多个数据库检索知识
-        all_results = []
-
-        if req.source_files and len(req.source_files) > 0:
-            # 按文件出题模式
-            for sf in req.source_files:
-                try:
-                    db = db_manager.get(sf.db_id)
-                    results = db.get_by_source(sf.filename)
-                    all_results.extend(results)
-                except Exception as e:
-                    logger.warning(f"获取文件 {sf.filename} 失败: {e}")
-        else:
-            # 按关键词搜索模式
-            for query in req.queries:
-                if req.merge_db_results:
-                    # 合并所有指定数据库的结果
-                    for db_id in req.db_ids:
-                        try:
-                            db = db_manager.get(db_id)
-                            results = db.search(query, req.n_results_per_query)
-                            all_results.extend(results)
-                        except Exception as e:
-                            logger.warning(f"搜索数据库 {db_id} 失败: {e}")
-                else:
-                    # 分别搜索每个数据库（取Top K）
-                    db_results = db_manager.search(query, req.db_ids, req.n_results_per_query)
-                    for db_id, results in db_results.items():
-                        all_results.extend(results)
-
-        # 去重并按相关度排序
-        seen = set()
-        unique_results = []
-        for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
-            key = r["text"][:100]
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(r)
-
-        if not unique_results:
-            raise HTTPException(status_code=400, detail="未检索到任何知识内容，请先上传文件")
-
-        # 2. 生成考卷
-        exam_md = generate_exam(
-            title=req.title,
-            knowledge_results=unique_results,
-            question_types=req.question_types,
-            exam_time=req.exam_time,
-            passing_score=req.passing_score,
-            llm_provider=req.llm_provider,
-            llm_model=req.llm_model
-        )
-
-        # 3. 统计
-        stats = count_questions(exam_md)
-        total_questions = sum(q.count for q in req.question_types)
-        total_score = sum(q.count * q.score_per_question for q in req.question_types)
-
-        # 4. 保存文件
-        output_dir = config.STORAGE_DIR / "exams"
-        output_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_title = "".join(c if c.isalnum() or c in "_-" else "_" for c in req.title)
-        filename = f"{safe_title}_{timestamp}.md"
-        filepath = output_dir / filename
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(exam_md)
-            f.write(f"\n\n---\n\n")
-            f.write(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"**数据来源**: {', '.join(req.db_ids)}\n")
-            f.write(f"**搜索关键词**: {', '.join(req.queries)}\n")
-            f.write(f"**题目统计**: 单选 {stats['single']} | 多选 {stats['multi']} | 判断 {stats['judge']} | 简答 {stats['essay']}\n")
-
-        return {
-            "status": "success",
-            "filename": filename,
-            "filepath": str(filepath),
-            "preview": exam_md[:2000],
-            "stats": {
-                "expected": total_questions,
-                "single": stats["single"],
-                "multi": stats["multi"],
-                "judge": stats["judge"],
-                "essay": stats["essay"]
-            }
-        }
-
+        return _generate_exam_response(req)
     except HTTPException:
         raise
     except Exception as e:
@@ -281,19 +352,50 @@ def generate_exam_endpoint(req: GenerateExamRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/exam/generate/task")
+def generate_exam_task(req: GenerateExamRequest):
+    """创建后台出题任务"""
+    try:
+        task_id = task_manager.submit(f"生成考卷: {req.title}", _generate_exam_response, req)
+        return {"status": "accepted", "task_id": task_id}
+    except Exception as e:
+        logger.error(f"创建出题任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/exam/download/{filename}")
 def download_exam(filename: str):
     """下载考卷"""
-    filepath = config.STORAGE_DIR / "exams" / filename
+    try:
+        filepath = ensure_safe_child_path(config.EXAMS_DIR, filename)
+        if filepath.suffix.lower() != ".md":
+            raise ValueError("只能下载 Markdown 考卷")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(str(filepath), filename=filename, media_type="text/markdown")
 
 
+@app.delete("/api/exam/{filename}")
+def delete_exam(filename: str):
+    """删除已生成的考卷"""
+    try:
+        filepath = ensure_safe_child_path(config.EXAMS_DIR, filename)
+        if filepath.suffix.lower() != ".md":
+            raise ValueError("只能删除 Markdown 考卷")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    filepath.unlink()
+    return {"status": "success", "message": f"考卷 {filename} 已删除"}
+
+
 @app.get("/api/exam/list")
 def list_exams():
     """列出已生成的考卷"""
-    exam_dir = config.STORAGE_DIR / "exams"
+    exam_dir = config.EXAMS_DIR
     exam_dir.mkdir(exist_ok=True)
     files = sorted(exam_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     return {
@@ -470,6 +572,15 @@ def test_llm_connection(req: LLMTestRequest):
 
 # ========== 启动 ==========
 
+def configure_stdio():
+    """Windows 终端输出使用 UTF-8，避免作为模块导入时破坏测试捕获。"""
+    import io
+    if hasattr(sys.stdout, "detach"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding='utf-8')
+    if hasattr(sys.stderr, "detach"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding='utf-8')
+
+
 def open_browser(host: str, port: int, delay: float = 2.0):
     import threading
     import webbrowser
@@ -480,6 +591,7 @@ def open_browser(host: str, port: int, delay: float = 2.0):
     threading.Thread(target=_open, daemon=True).start()
 
 if __name__ == "__main__":
+    configure_stdio()
     print(f"[*] 启动智能知识库出题系统")
     print(f"[*] API: http://127.0.0.1:{config.API_PORT}")
     print(f"[*] 文档: http://127.0.0.1:{config.API_PORT}/docs")
