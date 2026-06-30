@@ -12,8 +12,10 @@
 | **多数据库管理** | 可创建多个独立知识库，按业务/科目分类管理 |
 | **多库联合出题** | 支持单库出题或多库合并出题，知识来源灵活组合 |
 | **多题型配置** | 单选题、多选题、判断题、简答题，可自由组合题量和分值 |
-| **分批生成** | 大量题目自动分批调用 LLM，避免输出截断，确保题量完整 |
-| **格式统一** | 自动后处理 AI 输出，去除引用块、统一答案格式、自动生成答案速查表 |
+| **难度比例配置** | 可手动设置基础题、理解题、应用题比例，生成时随题型配置一并传入模型 |
+| **分批生成** | 大量题目自动分批调用 LLM，避免输出截断，并对缺题进行校验和补齐 |
+| **格式统一** | 自动后处理 AI 输出，统一答案/解析格式、修正简答题编号、生成答案速查表 |
+| **多模型切换** | 默认 MiniMax，同时支持 OpenAI、Anthropic、通义千问、DeepSeek、Kimi、硅基流动、火山方舟、GLM 和自定义 OpenAI 兼容接口 |
 | **Web 前端** | 开箱即用的管理界面，无需额外部署前端服务 |
 
 ---
@@ -30,7 +32,7 @@
 - **向量数据库**: ChromaDB
 - **Embedding 模型**: BGE-M3（本地加载，无需联网）
 - **语音转文字**: OpenAI Whisper（本地加载）
-- **大模型**: MiniMax API（需要 API Key）
+- **大模型**: MiniMax（默认），同时支持 OpenAI、Anthropic、通义千问、DeepSeek、Kimi、硅基流动、火山方舟、GLM、自定义 OpenAI 兼容接口
 - **视频处理**: FFmpeg
 
 ---
@@ -53,7 +55,9 @@ exam-generator/
 ├── storage/
 │   ├── files/             # 上传的原始文件
 │   ├── vectors/           # 向量数据库持久化数据
-│   └── exams/             # 生成的考卷文件
+│   ├── exams/             # 生成的考卷文件
+│   ├── db_registry.json   # 数据库注册表
+│   └── llm_config.json    # Web 界面保存的 LLM 运行时配置
 ├── models/                # AI 模型文件夹（手动放置）
 │   ├── bge-m3/            # Embedding 模型
 │   └── whisper/           # 语音转文字模型
@@ -138,9 +142,11 @@ brew install ffmpeg
 ffmpeg -version
 ```
 
-### 4. 配置 API Key
+### 4. 配置 LLM API Key
 
-项目依赖 MiniMax 大模型 API 生成考题，必须配置 API Key。
+生成考卷必须至少配置一个 LLM 提供商的 API Key。默认提供商是 MiniMax，但也可以在 Web 界面的「系统设置」中切换到 OpenAI、Anthropic、通义千问、DeepSeek、Kimi、硅基流动、火山方舟、GLM 或自定义 OpenAI 兼容接口。
+
+首次部署可以先通过 `.env` 写入默认配置，系统启动后会迁移到 `storage/llm_config.json`；之后更推荐直接在 Web 界面保存和测试模型配置。
 
 ```bash
 # 复制模板
@@ -151,15 +157,21 @@ cp .env.template .env
 
 `.env` 文件内容示例：
 ```ini
+# 默认使用 MiniMax；如需其他提供商，也可以启动后在 Web 界面配置
+LLM_PROVIDER=minimax
 MINIMAX_API_KEY=your_api_key_here
 MINIMAX_BASE_URL=https://api.minimax.chat/v1
 MINIMAX_MODEL=MiniMax-M2.7
 ```
 
-> 如何获取 MiniMax API Key？
-> 1. 访问 https://www.minimaxi.com/
-> 2. 注册并登录开发者平台
-> 3. 在「控制台」→「API Key」中创建并复制
+常见提供商配置方式：
+
+| 提供商 | 配置方式 |
+|--------|----------|
+| MiniMax | `.env` 中配置 `MINIMAX_API_KEY`，或在「系统设置」选择 MiniMax 后填写 |
+| OpenAI / Kimi / 硅基流动 / 火山方舟 / GLM / 自定义 | 在「系统设置」中填写 Base URL、API Key、模型名 |
+| Anthropic | 在「系统设置」中填写 API Key 和模型名 |
+| 通义千问 / DeepSeek | 可用 `.env` 中的 `DASHSCOPE_*`、`DEEPSEEK_*`，也可在「系统设置」中填写 |
 
 ### 5. 启动服务
 
@@ -167,7 +179,7 @@ MINIMAX_MODEL=MiniMax-M2.7
 python main.py
 ```
 
-首次启动时会加载 BGE-M3 模型，约需 10~30 秒（取决于磁盘速度）。
+服务启动时会检查本地模型路径和 FFmpeg。BGE-M3 Embedding 模型采用懒加载：首次上传入库或语义搜索时才会真正加载，约需 10~30 秒（取决于磁盘速度）。
 
 启动成功后终端显示：
 ```
@@ -199,6 +211,7 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
    - 考卷标题
    - 搜索关键词（每行一个，如"企业战略"、"风险防范"）
    - 题型设置（添加单选/多选/判断/简答，设置数量和分值）
+   - 难度比例（基础/理解/应用，合计 100%）
    - 数据库选择（单库或多库联合）
    - 考试时间、合格线
 4. 点击「生成考卷」，等待 LLM 生成后预览和下载
@@ -229,7 +242,10 @@ curl -X POST http://localhost:8000/api/exam/generate \
       {"type": "judge", "count": 10, "score_per_question": 2}
     ],
     "exam_time": "60分钟",
-    "passing_score": 60
+    "passing_score": 60,
+    "difficulty_basic": 50,
+    "difficulty_understanding": 35,
+    "difficulty_application": 15
   }'
 ```
 
@@ -245,11 +261,17 @@ curl -X POST http://localhost:8000/api/exam/generate \
 | `/api/databases` | POST | 创建数据库 |
 | `/api/databases/{db_id}` | DELETE | 删除数据库 |
 | `/api/upload` | POST | 上传单个文件 |
+| `/api/upload/task` | POST | 创建后台上传入库任务 |
 | `/api/upload/batch` | POST | 批量上传文件 |
+| `/api/tasks/{task_id}` | GET | 查询后台任务状态 |
 | `/api/search` | POST | 知识库语义搜索 |
 | `/api/exam/generate` | POST | 生成考卷 |
+| `/api/exam/generate/task` | POST | 创建后台出题任务 |
 | `/api/exam/list` | GET | 考卷历史列表 |
 | `/api/exam/download/{filename}` | GET | 下载考卷文件 |
+| `/api/exam/{filename}` | DELETE | 删除生成的考卷 |
+| `/api/llm/settings` | GET/POST | 获取 / 保存 LLM 设置 |
+| `/api/llm/test` | POST | 测试 LLM 连通性 |
 
 ---
 
@@ -271,9 +293,10 @@ curl -X POST http://localhost:8000/api/exam/generate \
 
 ### Q4: 生成的题目数量不够
 
-系统已自动采用分批生成策略（每批最多 25 道），如果仍不足，通常是 LLM API 输出被截断。可以尝试：
+系统已自动采用分批生成策略（每批最多 25 道），并会对题号进行校验，缺失题目会插入占位题提醒人工补充。如果仍出现缺题或占位题较多，通常是 LLM API 输出被截断或模型没有严格遵守格式。可以尝试：
 - 减少每次生成的题目数量
 - 检查 API Key 的额度是否充足
+- 更换上下文更长或指令遵循更好的模型
 
 ### Q5: 如何更换 Embedding 模型？
 
@@ -281,22 +304,28 @@ curl -X POST http://localhost:8000/api/exam/generate \
 
 ### Q6: 如何更换 LLM（不用 MiniMax）？
 
-编辑 `exam.py` 中的 `LLMClient` 类，修改 `base_url`、`headers` 和请求格式以适配其他 API（如 OpenAI、通义千问、文心一言等）。同时修改 `config.py` 中的 `MINIMAX_*` 配置。
+不需要修改代码。进入 Web 界面「系统设置」，选择目标模型提供商，填写 Base URL、API Key 和模型名，点击「测试连接」，成功后保存即可。系统会把配置写入 `storage/llm_config.json`，之后出题会使用当前激活的提供商。
+
+当前内置提供商包括：MiniMax、OpenAI、Anthropic Claude、通义千问、DeepSeek、Kimi（月之暗面）、硅基流动、火山方舟、GLM（智谱）和自定义 OpenAI 兼容接口。
+
+也可以通过 `.env` 初始化部分常用提供商配置，例如 `LLM_PROVIDER=minimax`、`OPENAI_API_KEY=...`、`DASHSCOPE_API_KEY=...`、`DEEPSEEK_API_KEY=...`。`.env` 主要用于首次迁移；运行中的配置以 Web 界面保存的 `storage/llm_config.json` 为准。
 
 ---
 
 ## 注意事项
 
-1. **MiniMax API Key 是必需的**，没有 Key 无法生成考卷（向量入库和搜索不依赖 API Key）
-2. **模型文件不会被提交到 Git**，`models/` 目录应在 `.gitignore` 中
-3. **向量数据库数据存储在 `storage/vectors/`**，迁移项目时需一并复制
-4. **上传的原始文件保存在 `storage/files/`**
-5. **生成的考卷保存在 `storage/exams/`**
+1. **生成考卷必须配置至少一个 LLM API Key**。MiniMax 只是默认提供商，不是唯一选择；向量入库和搜索不依赖 LLM API Key。
+2. **LLM 运行时配置保存在 `storage/llm_config.json`**，其中可能包含 API Key，不应提交到版本控制。
+3. **模型文件不会被提交到 Git**，`models/` 目录应在 `.gitignore` 中。
+4. **向量数据库数据存储在 `storage/vectors/`**，迁移项目时需一并复制。
+5. **上传的原始文件保存在 `storage/files/`**。
+6. **生成的考卷保存在 `storage/exams/`**，可在 Web 界面的「考卷历史」中下载或删除。
+7. **更换 Embedding 模型后需重新入库**，不同 Embedding 模型生成的向量不兼容。
 
 ---
 
 ## 版本信息
 
 - **版本**: v2.0.0
-- **更新日期**: 2026-04-28
+- **更新日期**: 2026-06-30
 - **端口**: 8000

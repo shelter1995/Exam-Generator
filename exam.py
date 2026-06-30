@@ -95,17 +95,52 @@ def format_exam_content(raw: str) -> str:
     return content.strip()
 
 
+def normalize_essay_answer_numbering(content: str) -> str:
+    """避免简答题答案内部编号被 Markdown 渲染成新题号。"""
+    lines = content.split('\n')
+    normalized = []
+    in_answer = False
+    for line in lines:
+        is_question_line = bool(re.match(r'^\d+\.\s*\[', line))
+        if is_question_line:
+            in_answer = False
+
+        if '**答案：**' in line:
+            in_answer = True
+        elif '**解析：**' in line:
+            in_answer = False
+
+        if in_answer and re.match(r'^\d+\.\s+', line) and not is_question_line:
+            line = '   ' + line
+        normalized.append(line)
+    return '\n'.join(normalized)
+
+
 def generate_question_batch(
     knowledge: str,
     qtype: str,
     count: int,
     start_num: int,
     score: int,
-    llm_client = None
+    llm_client = None,
+    difficulty_distribution: Dict[str, int] = None
 ) -> str:
     """生成某一批次的题目"""
     cfg = QUESTION_TYPE_PROMPTS[qtype]
     end_num = start_num + count - 1
+    difficulty_distribution = difficulty_distribution or {
+        "basic": 50,
+        "understanding": 35,
+        "application": 15,
+    }
+    difficulty_text = (
+        f"基础题 {difficulty_distribution['basic']}%、"
+        f"理解题 {difficulty_distribution['understanding']}%、"
+        f"应用题 {difficulty_distribution['application']}%"
+    )
+    essay_extra = ""
+    if qtype == "essay":
+        essay_extra = "\n7. 简答题答案要用短横线分点，不要在答案或解析中使用行首阿拉伯数字编号（如 1.、2.、32.）"
 
     prompt = f"""你是专业的企业培训考题设计师。请基于以下知识内容，设计 {count} 道{cfg['name']}（第 {start_num}-{end_num} 题，每题{score}分）。
 
@@ -114,8 +149,9 @@ def generate_question_batch(
 2. {cfg['desc']}
 3. 所有题目必须严格基于提供的知识内容，不能编造
 4. 每道题都要有详细的答案和解析
-5. 难度分布：基础题 50%、理解题 35%、应用题 15%
+5. 难度分布：{difficulty_text}
 6. 题目要体现实际业务场景
+{essay_extra}
 
 【输出格式要求】
 必须严格按照以下格式输出，不要添加 ```markdown 代码块标记：
@@ -132,6 +168,8 @@ def generate_question_batch(
 - 不得省略任何题目
 - 答案格式必须是 {cfg['answer_example']}
 - 解析格式必须是 **解析：**开头
+- 解析中引用原始文件名，例如“依据《文件名.docx》”
+- 不要写“文档片段X”“片段X”“第X页”等用户无法定位的来源描述
 - 不要输出 ```markdown 标记
 - 不要输出答案速查表"""
 
@@ -139,7 +177,10 @@ def generate_question_batch(
         llm_client = create_llm_client()
 
     content = llm_client.chat(prompt, temperature=0.6, max_tokens=8192)
-    return format_exam_content(content)
+    content = format_exam_content(content)
+    if qtype == "essay":
+        content = normalize_essay_answer_numbering(content)
+    return content
 
 
 def generate_placeholder(start: int, end: int, qtype: str, score: int, reason: str = "") -> str:
@@ -158,15 +199,57 @@ def generate_placeholder(start: int, end: int, qtype: str, score: int, reason: s
     return "\n\n".join(parts)
 
 
-def build_knowledge_context(search_results: List[Dict], max_fragments: int = 15, max_len: int = 600) -> str:
+def extract_answers(content: str, expected_count: int) -> Dict[int, str]:
+    """从考卷内容中提取答案。"""
+    answers = {}
+    for qnum in range(1, expected_count + 1):
+        pattern = rf'(?ms)^{qnum}\.\s*\[.*?\].*?\*\*答案：\s*([A-F]+|正确|错误|[^*\n]+?)\s*\*\*'
+        match = re.search(pattern, content)
+        if match:
+            answers[qnum] = match.group(1).strip()
+    return answers
+
+
+def validate_exam_content(content: str, expected_count: int) -> Dict[str, Any]:
+    """校验题号、答案和解析是否完整。"""
+    numbers = [int(n) for n in re.findall(r'(?m)^(\d+)\.\s*\[', content)]
+    answers = extract_answers(content, expected_count)
+    missing_numbers = [n for n in range(1, expected_count + 1) if n not in numbers]
+    missing_answers = [n for n in numbers if 1 <= n <= expected_count and n not in answers]
+    missing_analysis = [
+        n for n in numbers
+        if 1 <= n <= expected_count
+        and not re.search(rf'(?ms)^{n}\.\s*\[.*?(?=^\d+\.\s*\[|\Z).*?\*\*解析：\*\*', content)
+    ]
+    return {
+        "valid": not missing_numbers and not missing_answers and not missing_analysis,
+        "numbers": numbers,
+        "missing_numbers": missing_numbers,
+        "missing_answers": missing_answers,
+        "missing_analysis": missing_analysis,
+        "answers": answers,
+    }
+
+
+def build_knowledge_context(
+    search_results: List[Dict],
+    total_questions: int = 10,
+    max_fragments: int = None,
+    max_len: int = None
+) -> str:
     """构建知识上下文"""
+    if max_fragments is None:
+        max_fragments = min(40, max(8, total_questions))
+    if max_len is None:
+        max_len = 900 if total_questions >= 20 else 600
+
     fragments = []
     for idx, r in enumerate(search_results[:max_fragments]):
         text = r["text"]
         source = r.get("metadata", {}).get("source", "未知")
         db_name = r.get("db_name", "未知")
         truncated = text[:max_len] if len(text) > max_len else text
-        fragments.append(f"【文档片段{idx+1}】来源: {source} (库: {db_name})\n{truncated}")
+        fragments.append(f"【资料{idx+1}】原始文件: {source} (知识库: {db_name})\n{truncated}")
     return "\n\n".join(fragments)
 
 
@@ -177,7 +260,9 @@ def generate_exam(
     exam_time: str = "90分钟",
     passing_score: int = 60,
     llm_provider: str = None,
-    llm_model: str = None
+    llm_model: str = None,
+    llm_client = None,
+    difficulty_distribution: Dict[str, int] = None
 ) -> str:
     """
     生成完整考卷
@@ -191,13 +276,11 @@ def generate_exam(
         llm_provider: 指定 LLM 提供商（如 "openai", "anthropic" 等）
         llm_model: 指定模型名称（如 "gpt-4o", "claude-3-5-sonnet-20241022" 等）
     """
-    knowledge = build_knowledge_context(knowledge_results)
-
     total_questions = sum(q.count for q in question_types)
     total_score = sum(q.count * q.score_per_question for q in question_types)
+    knowledge = build_knowledge_context(knowledge_results, total_questions=total_questions)
 
-    llm_client = None
-    if llm_provider or llm_model:
+    if llm_client is None and (llm_provider or llm_model):
         llm_client = create_llm_client(provider=llm_provider, model=llm_model)
 
     all_sections = []
@@ -222,7 +305,13 @@ def generate_exam(
 
             try:
                 part = generate_question_batch(
-                    knowledge, qtype, batch_count, batch_start, score, llm_client
+                    knowledge,
+                    qtype,
+                    batch_count,
+                    batch_start,
+                    score,
+                    llm_client,
+                    difficulty_distribution,
                 )
                 section_parts.append(part)
             except Exception as e:
@@ -233,6 +322,15 @@ def generate_exam(
             batch_start = batch_end + 1
 
         section_md = "\n\n".join(section_parts)
+        report = validate_exam_content(section_md, current_num + count - 1)
+        missing_in_section = [
+            n for n in report["missing_numbers"]
+            if current_num <= n <= current_num + count - 1
+        ]
+        if missing_in_section:
+            logger.warning(f"{cfg['name']} 缺少题号: {missing_in_section}")
+            for qnum in missing_in_section:
+                section_md += "\n\n" + generate_placeholder(qnum, qnum, qtype, score, "题量校验补齐")
 
         section_title = f"## {['一', '二', '三', '四', '五'][section_idx - 1]}、{cfg['name']}"
         section_title += f"（第{current_num}-{current_num + count - 1}题，每题{score}分，共{count * score}分）\n\n"
@@ -246,7 +344,7 @@ def generate_exam(
     provider_info = ""
     if llm_provider:
         model_name = llm_model or "默认"
-        provider_info = f" | 使用模型: {provider_info}/{model_name}"
+        provider_info = f" | 使用模型: {llm_provider}/{model_name}"
 
     exam = f"""# {title}
 
@@ -268,21 +366,13 @@ def generate_exam(
 |------|------|------|------|------|------|------|------|
 """
 
+    answers = extract_answers(questions_md, total_questions)
     for row_start in range(1, total_questions + 1, 4):
         row = []
         for col in range(4):
             qnum = row_start + col
             if qnum <= total_questions:
-                patterns = [
-                    rf'{qnum}\.\s*\[.*?\].*?\*\*答案：([A-F]+)\*\*',
-                    rf'{qnum}\.\s*\[.*?\].*?\*\*答案：(正确|错误)\*\*',
-                ]
-                ans = "?"
-                for pat in patterns:
-                    m = re.search(pat, questions_md, re.DOTALL)
-                    if m:
-                        ans = m.group(1)
-                        break
+                ans = answers.get(qnum, "?")
                 row.append(f"| {qnum} | {ans} ")
             else:
                 row.append("| | ")
@@ -294,8 +384,19 @@ def generate_exam(
 
 def count_questions(exam_md: str) -> Dict[str, int]:
     """统计考卷中各题型数量"""
-    single = len(re.findall(r'^\d+\.\s*\[.*?\].*?\*\*答案：([A-D])\*\*', exam_md, re.MULTILINE | re.DOTALL))
-    multi = len(re.findall(r'^\d+\.\s*\[.*?\].*?\*\*答案：([A-F]{2,})\*\*', exam_md, re.MULTILINE | re.DOTALL))
-    judge = len(re.findall(r'^\d+\.\s*\[.*?\].*?\*\*答案：(正确|错误)\*\*', exam_md, re.MULTILINE | re.DOTALL))
-    essay = len(re.findall(r'^\d+\.\s*\[.*?\].*?\*\*答案：', exam_md, re.MULTILINE | re.DOTALL)) - single - multi - judge
+    blocks = re.findall(r'(?ms)^\d+\.\s*\[.*?(?=^\d+\.\s*\[|\Z)', exam_md)
+    single = multi = judge = essay = 0
+    for block in blocks:
+        match = re.search(r'\*\*答案：\s*([^*\n]+?)\s*\*\*', block)
+        if not match:
+            continue
+        ans = match.group(1).strip()
+        if re.fullmatch(r'[A-D]', ans):
+            single += 1
+        elif re.fullmatch(r'[A-F]{2,}', ans):
+            multi += 1
+        elif ans in ("正确", "错误"):
+            judge += 1
+        else:
+            essay += 1
     return {"single": single, "multi": multi, "judge": judge, "essay": max(0, essay)}

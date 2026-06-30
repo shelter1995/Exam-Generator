@@ -116,5 +116,4 @@ def get_available_providers() -> List[Dict]:
 
     return result
 
-
-llm = create_llm_client()
+llm = None

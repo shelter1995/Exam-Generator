@@ -14,6 +14,7 @@ import chromadb
 from chromadb.config import Settings
 
 import config
+from security import validate_db_id
 from embedding import embedder
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class VectorDatabase:
     """单个向量数据库"""
 
     def __init__(self, db_id: str, name: str, description: str = ""):
+        db_id = validate_db_id(db_id)
         self.db_id = db_id
         self.name = name
         self.description = description
@@ -151,6 +153,7 @@ class DatabaseManager:
                 logger.error(f"加载数据库 {db_id} 失败: {e}")
 
     def create(self, db_id: str, name: str, description: str = "") -> VectorDatabase:
+        db_id = validate_db_id(db_id)
         if db_id in self.databases:
             raise ValueError(f"数据库 '{db_id}' 已存在")
         db = VectorDatabase(db_id, name, description)
@@ -165,6 +168,7 @@ class DatabaseManager:
         return db
 
     def delete(self, db_id: str):
+        db_id = validate_db_id(db_id)
         if db_id not in self.databases:
             raise ValueError(f"数据库 '{db_id}' 不存在")
         self.databases[db_id].delete()
@@ -174,11 +178,13 @@ class DatabaseManager:
         logger.info(f"删除数据库: {db_id}")
 
     def get(self, db_id: str) -> VectorDatabase:
+        db_id = validate_db_id(db_id)
         if db_id not in self.databases:
             raise ValueError(f"数据库 '{db_id}' 不存在")
         return self.databases[db_id]
 
     def update(self, db_id: str, name: str, description: str = "") -> VectorDatabase:
+        db_id = validate_db_id(db_id)
         if db_id not in self.databases:
             raise ValueError(f"数据库 '{db_id}' 不存在")
         db = self.databases[db_id]
@@ -203,7 +209,7 @@ class DatabaseManager:
         return result
 
     def search(self, query: str, db_ids: Optional[List[str]] = None, n_results: int = 10) -> Dict[str, List[Dict]]:
-        target_ids = db_ids if db_ids else list(self.databases.keys())
+        target_ids = [validate_db_id(db_id) for db_id in db_ids] if db_ids else list(self.databases.keys())
         results = {}
         for db_id in target_ids:
             if db_id in self.databases:

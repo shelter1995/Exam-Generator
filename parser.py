@@ -10,6 +10,18 @@ from typing import Dict, List, Any
 import config
 
 logger = logging.getLogger(__name__)
+_whisper_model = None
+
+
+def get_whisper_model():
+    """懒加载并缓存 Whisper 模型。"""
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        model_path = config.WHISPER_MODEL_PATH or "base"
+        logger.info(f"加载 Whisper 模型: {model_path}")
+        _whisper_model = whisper.load_model(model_path)
+    return _whisper_model
 
 
 def chunk_text(text: str) -> List[str]:
@@ -145,11 +157,8 @@ def _extract_text(path: Path) -> str:
 def _parse_audio(path: Path, db_id: str) -> Dict[str, Any]:
     """音频：Whisper 转录"""
     try:
-        import whisper
         logger.info(f"开始转录音频: {path.name}")
-        # 优先使用本地模型
-        model_path = config.WHISPER_MODEL_PATH or "base"
-        model = whisper.load_model(model_path)
+        model = get_whisper_model()
         result = model.transcribe(str(path), language="zh", fp16=False)
         text = result["text"]
         return _chunk_and_meta(text, path.name, path.suffix, db_id)
@@ -161,6 +170,7 @@ def _parse_audio(path: Path, db_id: str) -> Dict[str, Any]:
 def _parse_video(path: Path, db_id: str) -> Dict[str, Any]:
     """视频：提取音频 -> Whisper 转录"""
     import tempfile
+    audio_path = None
     try:
         import subprocess
         logger.info(f"开始处理视频: {path.name}")
@@ -175,17 +185,17 @@ def _parse_video(path: Path, db_id: str) -> Dict[str, Any]:
         ]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-        import whisper
-        model_path = config.WHISPER_MODEL_PATH or "base"
-        model = whisper.load_model(model_path)
+        model = get_whisper_model()
         result = model.transcribe(audio_path, language="zh", fp16=False)
         text = result["text"]
 
-        Path(audio_path).unlink(missing_ok=True)
         return _chunk_and_meta(text, path.name, path.suffix, db_id)
     except Exception as e:
         logger.error(f"视频解析失败: {e}")
         return {"texts": [], "metadatas": [], "ids": []}
+    finally:
+        if audio_path:
+            Path(audio_path).unlink(missing_ok=True)
 
 
 def _chunk_and_meta(text: str, filename: str, ext: str, db_id: str) -> Dict[str, Any]:
